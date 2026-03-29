@@ -1,0 +1,75 @@
+import os
+import cv2
+import numpy as np
+
+image_folder = r"D:\00\airbrin\yolo的窗户标签\images"
+label_folder = r"D:\00\airbrin\yolo的窗户标签\labels"
+output_folder = r"D:\00\airbrin\airbnb_ply"
+
+os.makedirs(output_folder, exist_ok=True)
+
+
+def save_ply(points, colors, filename):
+    with open(filename, 'w') as f:
+        f.write("ply\nformat ascii 1.0\n")
+        f.write(f"element vertex {len(points)}\n")
+        f.write("property float x\nproperty float y\nproperty float z\n")
+        f.write("property uchar red\nproperty uchar green\nproperty uchar blue\n")
+        f.write("end_header\n")
+
+        for (x, y, z), (r, g, b) in zip(points, colors):
+            f.write(f"{x} {y} {z} {r} {g} {b}\n")
+
+
+for img_name in os.listdir(image_folder):
+    if not img_name.endswith((".jpg", ".png")):
+        continue
+
+    img_path = os.path.join(image_folder, img_name)
+    label_path = os.path.join(label_folder, img_name.replace(".jpg", ".txt").replace(".png", ".txt"))
+
+    if not os.path.exists(label_path):
+        continue
+
+    img = cv2.imread(img_path)
+    h, w, _ = img.shape
+
+    with open(label_path, "r") as f:
+        lines = f.readlines()
+
+    for i, line in enumerate(lines):
+        cls, cx, cy, bw, bh = map(float, line.strip().split())
+
+        # 假设 class 0 是 window（如果不是你要改）
+        if int(cls) != 0:
+            continue
+
+        x1 = int((cx - bw / 2) * w)
+        y1 = int((cy - bh / 2) * h)
+        x2 = int((cx + bw / 2) * w)
+        y2 = int((cy + bh / 2) * h)
+
+        crop = img[y1:y2, x1:x2]
+
+        points = []
+        colors = []
+
+        ch, cw, _ = crop.shape
+
+        for y in range(ch):
+            for x in range(cw):
+                b, g, r = crop[y, x]
+
+                px = x - cw / 2
+                py = -(y - ch / 2)
+                pz = 0
+
+                points.append([px, py, pz])
+                colors.append([r, g, b])
+
+        ply_name = f"{img_name.split('.')[0]}_{i}.ply"
+        save_ply(points, colors, os.path.join(output_folder, ply_name))
+
+        print(f"Saved: {ply_name}")
+
+print("DONE ✔")
