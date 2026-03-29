@@ -1,0 +1,129 @@
+import os
+import cv2
+import numpy as np
+from ultralytics import YOLO
+
+# ========= PATHS =========
+root_dir = r"D:\00\film_frames_6"
+output_root = r"D:\00\final_overlay_pro"
+
+model_path = r"C:\Users\86130\runs\detect\train4\weights\best.pt"
+
+os.makedirs(output_root, exist_ok=True)
+
+model = YOLO(model_path)
+
+group_size = 6
+width, height = 640, 384
+
+# ========= PROCESS EACH CATEGORY =========
+for category in os.listdir(root_dir):
+    category_path = os.path.join(root_dir, category)
+
+    if not os.path.isdir(category_path):
+        continue
+
+    print(f"\n📁 Processing: {category}")
+
+    output_dir = os.path.join(output_root, category)
+    os.makedirs(output_dir, exist_ok=True)
+
+    images = sorted([
+        f for f in os.listdir(category_path)
+        if f.endswith(".jpg")
+    ])
+
+    # ========= GROUP FRAMES =========
+    for i in range(0, len(images), group_size):
+        group = images[i:i+group_size]
+
+        if len(group) < group_size:
+            continue
+
+        # ========= INIT CANVAS =========
+        canvas = np.zeros((height, width, 3), dtype=np.float32)
+        trajectory = []
+
+        # ========= OVERLAY FRAMES =========
+        for j, img_name in enumerate(group):
+
+            path = os.path.join(category_path, img_name)
+            img = cv2.imread(path)
+
+            if img is None:
+                continue
+
+            img = cv2.resize(img, (width, height)).astype(np.float32)
+
+            alpha = 1.0 / group_size
+            canvas += img * alpha
+
+            # ========= YOLO DETECTION =========
+            results = model(img.astype(np.uint8), conf=0.4)
+
+            if results[0].boxes is None or len(results[0].boxes) == 0:
+                continue
+
+            boxes = results[0].boxes.xyxy.cpu().numpy()
+
+            # Select largest window
+            areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+            idx = areas.argmax()
+
+            x1, y1, x2, y2 = map(int, boxes[idx])
+            cx = int((x1 + x2) / 2)
+            cy = int((y1 + y2) / 2)
+
+            trajectory.append((cx, cy))
+
+        canvas = np.clip(canvas, 0, 255).astype(np.uint8)
+
+        # ========= SKIP IF NO TRAJECTORY =========
+        if len(trajectory) < 2:
+            continue
+
+        # ========= DRAW GRADIENT TRAJECTORY (RED → BLUE) =========
+        for k in range(len(trajectory) - 1):
+
+            pt1 = trajectory[k]
+            pt2 = trajectory[k + 1]
+
+            t = k / (len(trajectory) - 1)
+
+            r = int(255 * (1 - t))
+            g = 0
+            b = int(255 * t)
+
+            color = (b, g, r)
+
+            # Line thickness gradient
+            thickness = int(6 * (1 - t)) + 1
+
+            cv2.line(canvas, pt1, pt2, color, thickness)
+
+        # ========= DRAW POINTS =========
+        for k, (x, y) in enumerate(trajectory):
+
+            t = k / (len(trajectory) - 1)
+
+            r = int(255 * (1 - t))
+            g = 0
+            b = int(255 * t)
+
+            color = (b, g, r)
+
+            radius = int(6 * (1 - t)) + 2
+
+            cv2.circle(canvas, (x, y), radius, color, -1)
+
+        # ========= START & END POINT =========
+        cv2.circle(canvas, trajectory[0], 10, (0, 0, 255), -1)   # start (red)
+        cv2.circle(canvas, trajectory[-1], 10, (255, 0, 0), -1)  # end (blue)
+
+        # ========= SAVE =========
+        save_path = os.path.join(output_dir, f"{category}_group_{i}.jpg")
+        cv2.imwrite(save_path, canvas)
+
+        print(f"🔥 Saved: {save_path}")
+
+print("\n🔥 Completed: Frame Overlay + Gaze Trajectory")
