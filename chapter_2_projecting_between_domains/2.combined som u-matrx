@@ -1,0 +1,60 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from minisom import MiniSom
+
+# =====================================
+# Load vector datasets
+# =====================================
+painting_vectors = np.load(r"D:\VECTORS\painting_vectors.npy")
+film_vectors = np.load(r"D:\VECTORS\film_vectors.npy")
+airbnb_vectors = np.load(r"D:\VECTORS\airbnb_vectors.npy")
+
+# =====================================
+# Combine datasets into one array
+# =====================================
+data = np.vstack([
+    painting_vectors,
+    film_vectors,
+    airbnb_vectors
+])
+
+print(f"Total samples: {data.shape[0]}")
+print(f"Feature dimension: {data.shape[1]}")
+
+# =====================================
+# Initialize and train SOM
+# =====================================
+som = MiniSom(
+    x=20,
+    y=20,
+    input_len=data.shape[1],
+    sigma=1.0,
+    learning_rate=0.5
+)
+
+som.random_weights_init(data)
+som.train_random(data, 1000)
+
+# =====================================
+# Compute U-Matrix (distance map)
+# =====================================
+u_matrix = som.distance_map()
+
+# =====================================
+# Visualization
+# =====================================
+plt.figure(figsize=(6, 6))
+plt.imshow(u_matrix, cmap='gray')
+plt.colorbar()
+plt.title("SOM U-Matrix")
+plt.axis("off")
+
+# =====================================
+# Save result
+# =====================================
+output_path = r"D:\FINAL_RESULTS\som_umatrix.png"
+plt.savefig(output_path, dpi=300)
+
+print(f"U-Matrix saved to: {output_path}")
+
+plt.show()
