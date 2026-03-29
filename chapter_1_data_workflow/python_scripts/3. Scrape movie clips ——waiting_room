@@ -1,0 +1,159 @@
+import os
+import time
+import requests
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+
+# ================= CONFIGURATION =================
+
+SAVE_DIR = r"D:\00\film_clips\waiting_room"
+
+TARGET_URL = "https://panoramasofcinema.ch/search?q=places=waiting_room,0.010,1.000+faces=no_faces,small_faces"
+
+# ================================================
+
+if not os.path.exists(SAVE_DIR):
+    os.makedirs(SAVE_DIR)
+
+
+def get_real_video_urls():
+
+    print("Launching browser...")
+
+    options = webdriver.ChromeOptions()
+    driver = webdriver.Chrome(options=options)
+
+    real_video_urls = set()
+
+    try:
+
+        driver.get(TARGET_URL)
+
+        wait = WebDriverWait(driver, 15)
+
+        print("Waiting for page to load...")
+
+        wait.until(
+            EC.presence_of_element_located((By.CLASS_NAME, "img_response"))
+        )
+
+        print("Scrolling to load all content...")
+
+        last_height = driver.execute_script(
+            "return document.body.scrollHeight"
+        )
+
+        while True:
+
+            driver.execute_script(
+                "window.scrollTo(0, document.body.scrollHeight);"
+            )
+
+            time.sleep(2)
+
+            new_height = driver.execute_script(
+                "return document.body.scrollHeight"
+            )
+
+            if new_height == last_height:
+                break
+
+            last_height = new_height
+
+        images = driver.find_elements(By.CLASS_NAME, "img_response")
+
+        print(f"Found {len(images)} thumbnails")
+
+        for index, img in enumerate(images, 1):
+
+            try:
+
+                driver.execute_script("arguments[0].click();", img)
+
+                try:
+                    play_btn = wait.until(
+                        EC.element_to_be_clickable((By.ID, "playVid"))
+                    )
+                    driver.execute_script("arguments[0].click();", play_btn)
+                except:
+                    pass
+
+                video_xpath = "//video[@id='myVid' and contains(@src,'.mp4')]"
+
+                video_element = wait.until(
+                    EC.presence_of_element_located(
+                        (By.XPATH, video_xpath)
+                    )
+                )
+
+                real_src = video_element.get_attribute("src")
+
+                if real_src:
+                    real_video_urls.add(real_src)
+
+                    print(
+                        f"[{index}/{len(images)}] Successfully captured:",
+                        real_src.split("/")[-1],
+                    )
+
+                close_btn = driver.find_element(By.CLASS_NAME, "closeBtn")
+                driver.execute_script("arguments[0].click();", close_btn)
+
+                time.sleep(0.5)
+
+            except:
+                print(f"[{index}] Skipped")
+
+    finally:
+        driver.quit()
+
+    return list(real_video_urls)
+
+
+def download_videos(video_urls):
+
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Referer": TARGET_URL,
+        "Origin": "https://panoramasofcinema.ch",
+    }
+
+    for index, url in enumerate(video_urls, 1):
+
+        filename = url.split("/")[-1]
+
+        file_path = os.path.join(SAVE_DIR, filename)
+
+        if os.path.exists(file_path):
+            print(f"{filename} already exists, skipping")
+            continue
+
+        print(f"Downloading {filename}")
+
+        try:
+
+            response = requests.get(url, headers=headers, stream=True)
+
+            with open(file_path, "wb") as f:
+                for chunk in response.iter_content(8192):
+                    f.write(chunk)
+
+            print("Download completed")
+
+        except Exception as e:
+            print("Download failed:", e)
+
+
+if __name__ == "__main__":
+
+    print("Task started")
+
+    urls = get_real_video_urls()
+
+    print(f"Collected {len(urls)} videos")
+
+    download_videos(urls)
+
+    print("All tasks completed")
