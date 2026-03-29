@@ -1,0 +1,56 @@
+import os
+import numpy as np
+from PIL import Image
+
+input_folder = r"D:\00\绘画\绘画窗户碎片"
+output_folder = r"D:\00\painting_ply"
+
+os.makedirs(output_folder, exist_ok=True)
+
+
+def save_ply(points, colors, filename):
+    with open(filename, 'w') as f:
+        f.write("ply\nformat ascii 1.0\n")
+        f.write(f"element vertex {len(points)}\n")
+        f.write("property float x\nproperty float y\nproperty float z\n")
+        f.write("property uchar red\nproperty uchar green\nproperty uchar blue\n")
+        f.write("end_header\n")
+
+        for (x, y, z), (r, g, b) in zip(points, colors):
+            f.write(f"{x} {y} {z} {r} {g} {b}\n")
+
+
+for file in os.listdir(input_folder):
+    if not file.lower().endswith(".png"):
+        continue
+
+    path = os.path.join(input_folder, file)
+    img = Image.open(path).convert("RGBA")
+    data = np.array(img)
+
+    h, w, _ = data.shape
+
+    points = []
+    colors = []
+
+    for y in range(h):
+        for x in range(w):
+            r, g, b, a = data[y, x]
+
+            if a > 10:  # 透明过滤
+                px = x - w / 2
+                py = -(y - h / 2)
+                pz = 0
+
+                points.append([px, py, pz])
+                colors.append([r, g, b])
+
+    if len(points) == 0:
+        continue
+
+    ply_name = os.path.splitext(file)[0] + ".ply"
+    save_ply(points, colors, os.path.join(output_folder, ply_name))
+
+    print(f"Saved: {ply_name}")
+
+print("DONE ✔")
