@@ -1,0 +1,45 @@
+import bpy
+import random
+
+# =========================
+# Function: Create a 3D trajectory curve
+# =========================
+def create_path(points):
+
+    # Create a new curve data block
+    curve = bpy.data.curves.new(name='Path', type='CURVE')
+    curve.dimensions = '3D'
+
+    # Create a polyline spline
+    polyline = curve.splines.new('POLY')
+    polyline.points.add(len(points) - 1)
+
+    # Assign coordinates to each point
+    for i, p in enumerate(points):
+        x, y, z = p
+        polyline.points[i].co = (x, y, z, 1)
+
+    # Create object and link to scene
+    obj = bpy.data.objects.new("PathObj", curve)
+    bpy.context.collection.objects.link(obj)
+
+    return obj
+
+
+# =========================
+# Generate Example Trajectories (Simulating Gaze Movement)
+# =========================
+for i in range(10):
+
+    pts = []
+
+    for t in range(10):
+        pts.append((
+            t * 2,                          # X-axis progression (time)
+            random.uniform(-2, 2),          # Y variation
+            random.uniform(0, 5)            # Z variation (height)
+        ))
+
+    create_path(pts)
+
+print("Trajectory generation completed.")
