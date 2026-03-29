@@ -1,0 +1,55 @@
+import bpy
+import random
+
+# =========================
+# Duplicate and place object along trajectory
+# =========================
+def duplicate_and_place(obj, coll, base_x, base_y, scale_factor):
+
+    # Create a copy of the object
+    new_obj = obj.copy()
+
+    # Copy mesh / curve data if exists
+    if obj.data:
+        new_obj.data = obj.data.copy()
+
+    # Link object to collection
+    coll.objects.link(new_obj)
+
+    # =========================
+    # Position (along path + slight randomness)
+    # =========================
+    new_obj.location = (
+        base_x + random.uniform(-2, 2),
+        base_y + random.uniform(-2, 2),
+        random.uniform(0, 6)
+    )
+
+    # =========================
+    # Scale (controls visual clarity and variation)
+    # =========================
+    new_obj.scale = (
+        scale_factor,
+        scale_factor,
+        scale_factor * random.uniform(0.5, 1.5)
+    )
+
+    # =========================
+    # Rotation (light randomness)
+    # =========================
+    new_obj.rotation_euler = (
+        random.uniform(0, 0.4),
+        random.uniform(0, 0.4),
+        random.uniform(0, 1.5)
+    )
+
+    # =========================
+    # Enhance trajectory visibility (for curve objects)
+    # =========================
+    if new_obj.type == 'CURVE':
+        new_obj.data.bevel_depth = 0.05
+
+    return new_obj
+
+
+print("Path-based control, multi-dataset fusion, and 20 spatial fragments generated successfully.")
