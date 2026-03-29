@@ -1,0 +1,58 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.decomposition import PCA
+
+# =====================================
+# 1. Load vector data
+# =====================================
+airbnb_vectors = np.load(r"D:\VECTORS\airbnb_vectors.npy")
+
+print("Airbnb dataset shape:", airbnb_vectors.shape)
+
+# =====================================
+# 2. Apply PCA (reduce to 3 dimensions)
+# =====================================
+pca = PCA(n_components=3, whiten=True)
+pca_result = pca.fit_transform(airbnb_vectors)
+
+# =====================================
+# 3. Normalize values to [0, 1]
+# =====================================
+pca_min = pca_result.min(axis=0)
+pca_max = pca_result.max(axis=0)
+
+rgb = (pca_result - pca_min) / (pca_max - pca_min)
+
+# =====================================
+# 4. Adjust color intensity
+# =====================================
+rgb = np.clip(rgb * 1.2, 0, 1)   # increase contrast
+rgb = np.power(rgb, 1.2)         # smooth distribution
+
+# =====================================
+# 5. Reshape into grid
+# =====================================
+grid_size = int(np.sqrt(len(rgb)))
+
+# Ensure square grid
+rgb = rgb[:grid_size * grid_size]
+
+rgb_map = rgb.reshape(grid_size, grid_size, 3)
+
+# =====================================
+# 6. Visualization
+# =====================================
+plt.figure(figsize=(6, 6))
+plt.imshow(rgb_map)
+plt.title("PCA RGB Visualization (Airbnb Dataset)")
+plt.axis("off")
+
+# =====================================
+# 7. Save output
+# =====================================
+save_path = r"D:\FINAL_RESULTS\som_airbnb_rgb.png"
+plt.savefig(save_path, dpi=300)
+
+print("Saved to:", save_path)
+
+plt.show()
