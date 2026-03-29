@@ -1,0 +1,22 @@
+from sklearn.decomposition import PCA
+
+pca = PCA(n_components=3, whiten=True)
+pca_result = pca.fit_transform(data)
+
+pca_min = pca_result.min(axis=0)
+pca_max = pca_result.max(axis=0)
+
+rgb = (pca_result - pca_min) / (pca_max - pca_min)
+
+rgb = np.clip(rgb * 1.5, 0, 1)
+
+grid_size = 20
+rgb_map = rgb[:grid_size*grid_size].reshape(grid_size, grid_size, 3)
+
+plt.figure(figsize=(6,6))
+plt.imshow(rgb_map)
+plt.title("SOM PCA RGB")
+plt.axis("off")
+
+plt.savefig(r"D:\FINAL_RESULTS\som_pca_rgb.png", dpi=300)
+plt.show()
