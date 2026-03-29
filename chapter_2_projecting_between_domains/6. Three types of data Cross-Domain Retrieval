@@ -1,0 +1,238 @@
+import os
+import numpy as np
+import clip
+import torch
+from PIL import Image
+import matplotlib.pyplot as plt
+
+# =====================================
+# Model setup
+# =====================================
+device = "cuda" if torch.cuda.is_available() else "cpu"
+model, preprocess = clip.load("ViT-B/32", device=device)
+
+# =====================================
+# Load datasets
+# =====================================
+paint_vectors = np.load(r"D:\00\绘画\paintings_vectors.npy")
+paint_names = np.load(r"D:\00\绘画\paintings_names.npy", allow_pickle=True)
+
+film_vectors = np.load(r"D:\00\电影\film_vectors.npy")
+film_names = np.load(r"D:\00\电影\film_names.npy", allow_pickle=True)
+
+airbnb_vectors = np.load(r"D:\00\airbrin\airbnb_full_vectors.npy")
+airbnb_names = np.load(r"D:\00\airbrin\airbnb_names.npy", allow_pickle=True)
+
+# =====================================
+# Output directory
+# =====================================
+save_root = r"D:\00\final_results"
+os.makedirs(save_root, exist_ok=True)
+
+# =====================================
+# Semantic query groups
+# =====================================
+query_groups = {
+    "dark_hidden_window": [
+        "dark window interior",
+        "shadow window room",
+        "low light hidden window",
+        "dim window scene"
+    ],
+
+    "lonely_window_night": [
+        "lonely window at night",
+        "isolated window dark night",
+        "single window in darkness",
+        "quiet night window"
+    ],
+
+    "bright_sunlight_window": [
+        "bright sunlight through window",
+        "sunny window interior",
+        "strong natural light window",
+        "warm daylight window"
+    ],
+
+    "looking_through_window": [
+        "view through window to landscape",
+        "window looking outside nature",
+        "window framing outdoor scenery",
+        "window with clear outside view"
+    ],
+
+    "bedroom_window": [
+        "bedroom window interior soft light",
+        "cozy bedroom window",
+        "home bedroom window natural light"
+    ],
+
+    "corridor_window": [
+        "corridor window perspective",
+        "hallway window light depth",
+        "long corridor window scene"
+    ],
+
+    "attic_window": [
+        "attic window light beam",
+        "roof window sunlight",
+        "loft window interior light"
+    ],
+
+    "modern_large_window": [
+        "modern large glass window",
+        "architectural facade window",
+        "minimal large window design"
+    ],
+
+    "cinematic_window": [
+        "cinematic window lighting scene",
+        "film still window dramatic light",
+        "movie window composition"
+    ],
+
+    "dramatic_window_light": [
+        "dramatic window lighting contrast",
+        "strong shadow window light",
+        "high contrast window scene"
+    ]
+}
+
+# =====================================
+# Remove similar results
+# =====================================
+def cosine_similarity(a, b):
+    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+
+
+def remove_similar(indices, vectors, threshold=0.90):
+    selected = []
+    kept_vecs = []
+
+    for i in indices:
+        v = vectors[i]
+        keep = True
+
+        for sv in kept_vecs:
+            sim = cosine_similarity(v, sv)
+            if sim > threshold:
+                keep = False
+                break
+
+        if keep:
+            selected.append(i)
+            kept_vecs.append(v)
+
+    return selected
+
+# =====================================
+# Multi-query semantic search
+# =====================================
+def multi_query_search(queries):
+    tokens = clip.tokenize(queries).to(device)
+
+    with torch.no_grad():
+        text_features = model.encode_text(tokens)
+        text_features /= text_features.norm(dim=-1, keepdim=True)
+
+    text_features = text_features.cpu().numpy()
+
+    def rank(vectors):
+        sims = np.dot(vectors, text_features.T)  # [N, Q]
+        sims = sims.max(axis=1)                  # best match per image
+        return np.argsort(-sims)                 # descending order
+
+    return (
+        rank(paint_vectors),
+        rank(film_vectors),
+        rank(airbnb_vectors)
+    )
+
+# =====================================
+# Select top results
+# =====================================
+def select(indices, vectors, names, num=5):
+    indices = remove_similar(indices, vectors)
+
+    final = []
+    for i in indices:
+        path = str(names[i])
+        if not os.path.exists(path):
+            continue
+
+        final.append(i)
+        if len(final) >= num:
+            break
+
+    return final
+
+# =====================================
+# Safe image loading
+# =====================================
+def open_image_safe(path):
+    try:
+        return Image.open(path).convert("RGB")
+    except Exception as e:
+        print("Warning: failed to load image:", path, e)
+        return None
+
+# =====================================
+# Save collage (3 rows: painting / film / airbnb)
+# =====================================
+def save_collage(group_name, p_idxs, f_idxs, a_idxs,
+                 paint_names, film_names, airbnb_names,
+                 save_path, cols=5):
+
+    fig = plt.figure(figsize=(cols * 3.2, 10))
+    fig.suptitle(group_name.replace("_", " "), fontsize=18)
+
+    def draw_row(row_id, idxs, names, row_title):
+        for i in range(cols):
+            ax = plt.subplot(3, cols, row_id * cols + i + 1)
+
+            if i < len(idxs):
+                path = str(names[idxs[i]])
+                img = open_image_safe(path)
+                if img is not None:
+                    ax.imshow(img)
+
+            ax.axis("off")
+
+            if i == 0:
+                ax.set_title(row_title, loc="left", fontsize=12)
+
+    draw_row(0, p_idxs, paint_names, "Paintings")
+    draw_row(1, f_idxs, film_names, "Film")
+    draw_row(2, a_idxs, airbnb_names, "Airbnb")
+
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    plt.savefig(save_path, dpi=300, bbox_inches="tight")
+    plt.close()
+
+    print("Saved collage:", save_path)
+
+# =====================================
+# Main process
+# =====================================
+for group_name, queries in query_groups.items():
+    print("\nProcessing:", group_name)
+
+    p_all, f_all, a_all = multi_query_search(queries)
+
+    p = select(p_all, paint_vectors, paint_names, num=5)
+    f = select(f_all, film_vectors, film_names, num=5)
+    a = select(a_all, airbnb_vectors, airbnb_names, num=5)
+
+    save_path = os.path.join(save_root, f"{group_name}_collage.png")
+
+    save_collage(
+        group_name,
+        p, f, a,
+        paint_names,
+        film_names,
+        airbnb_names,
+        save_path,
+        cols=5
+    )
+
+print("\nAll results saved to:", save_root)
