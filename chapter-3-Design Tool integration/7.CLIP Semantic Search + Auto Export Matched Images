@@ -1,0 +1,116 @@
+import os
+import numpy as np
+import torch
+import clip
+from PIL import Image
+import shutil
+
+# =========================
+# Load CLIP model
+# =========================
+device = "cuda" if torch.cuda.is_available() else "cpu"
+model, preprocess = clip.load("ViT-B/32", device=device)
+
+# =========================
+# Load your vectors
+# =========================
+paint_vectors = np.load(r"D:\00\绘画\paintings_vectors.npy")
+paint_names = np.load(r"D:\00\绘画\paintings_names.npy")
+
+film_vectors = np.load(r"D:\00\电影\film_vectors.npy")
+film_names = np.load(r"D:\00\电影\film_names.npy")
+
+airbnb_vectors = np.load(r"D:\00\airbrin\airbnb_full_vectors.npy")
+airbnb_names = np.load(r"D:\00\airbrin\airbnb_names.npy")
+
+# =========================
+# Image roots (VERY IMPORTANT)
+# =========================
+paint_root = r"D:\00\绘画\全部绘画"
+film_root = r"D:\00\电影\电影6帧图片"
+airbnb_root = r"D:\00\airbrin\爱彼迎照片"
+
+# =========================
+# Output folder
+# =========================
+save_root = r"D:\00\自动搜索根据最终匹配出的图"
+os.makedirs(save_root, exist_ok=True)
+
+# =========================
+# Query groups (你的第二章用这个)
+# =========================
+query_groups = {
+    "warm_window": "warm sunlight entering room window",
+    "sunlight_room": "sunlight entering room",
+    "looking_through": "looking through window",
+    "lonely_night": "lonely window night"
+}
+
+# =========================
+# Search function
+# =========================
+def search_and_save(query, vectors, names, root, save_path, top_k=20):
+
+    # Encode text
+    text = clip.tokenize([query]).to(device)
+    with torch.no_grad():
+        text_features = model.encode_text(text).cpu().numpy()
+
+    # Normalize
+    text_features /= np.linalg.norm(text_features)
+    vectors /= np.linalg.norm(vectors, axis=1, keepdims=True)
+
+    # Similarity
+    sims = (vectors @ text_features.T).squeeze()
+
+    # Top results
+    top_idx = np.argsort(-sims)[:top_k]
+
+    os.makedirs(save_path, exist_ok=True)
+
+    for i in top_idx:
+        img_name = names[i]
+        src = os.path.join(root, img_name)
+
+        if os.path.exists(src):
+            dst = os.path.join(save_path, img_name)
+            shutil.copy(src, dst)
+
+# =========================
+# Run all queries
+# =========================
+for key, query in query_groups.items():
+
+    print(f"Processing: {query}")
+
+    # Create folder
+    query_folder = os.path.join(save_root, key)
+
+    # Paintings
+    search_and_save(
+        query,
+        paint_vectors.copy(),
+        paint_names,
+        paint_root,
+        os.path.join(query_folder, "paintings")
+    )
+
+    # Film
+    search_and_save(
+        query,
+        film_vectors.copy(),
+        film_names,
+        film_root,
+        os.path.join(query_folder, "film")
+    )
+
+    # Airbnb
+    search_and_save(
+        query,
+        airbnb_vectors.copy(),
+        airbnb_names,
+        airbnb_root,
+        os.path.join(query_folder, "airbnb")
+    )
+
+print("✅ All queries completed and images exported.")
