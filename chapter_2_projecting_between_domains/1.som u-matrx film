@@ -1,0 +1,49 @@
+import os
+import numpy as np
+import torch
+import clip
+from PIL import Image
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+model, preprocess = clip.load("ViT-B/32", device=device)
+
+root_folder = r"D:\00\电影\电影6帧图片"
+
+vectors = []
+names = []
+
+# =====================================
+# Traverse subfolders
+# =====================================
+for folder in os.listdir(root_folder):
+    sub_path = os.path.join(root_folder, folder)
+
+    if not os.path.isdir(sub_path):
+        continue
+
+    for file in os.listdir(sub_path):
+        if not file.lower().endswith((".jpg", ".png")):
+            continue
+
+        path = os.path.join(sub_path, file)
+
+        try:
+            image = preprocess(Image.open(path).convert("RGB")).unsqueeze(0).to(device)
+
+            with torch.no_grad():
+                feature = model.encode_image(image)
+                feature /= feature.norm(dim=-1, keepdim=True)
+
+            vectors.append(feature.cpu().numpy()[0])
+            names.append(path)
+
+        except:
+            continue
+
+# =====================================
+# Save
+# =====================================
+np.save(r"D:\VECTORS\film_vectors.npy", np.array(vectors))
+np.save(r"D:\VECTORS\film_names.npy", np.array(names))
+
+print("Film vectors saved ✔")
