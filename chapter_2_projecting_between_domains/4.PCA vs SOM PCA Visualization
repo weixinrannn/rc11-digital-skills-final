@@ -1,0 +1,76 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.decomposition import PCA
+from minisom import MiniSom
+
+# =========================
+# 1️⃣ Load your CLIP features
+# =========================
+vectors = np.load(r"D:\00\绘画\paintings_vectors.npy")  
+# 👉 你也可以换成 film / airbnb
+
+# =========================
+# 2️⃣ PCA on Dataset（原始数据）
+# =========================
+pca = PCA(n_components=3)
+pca_data = pca.fit_transform(vectors)
+
+# normalize to 0-1
+pca_data = (pca_data - pca_data.min()) / (pca_data.max() - pca_data.min())
+
+# reshape成图（关键‼️）
+size = int(np.sqrt(len(pca_data)))
+pca_img = pca_data[:size*size].reshape(size, size, 3)
+
+
+# =========================
+# 3️⃣ SOM训练
+# =========================
+som_size = 30
+
+som = MiniSom(som_size, som_size, vectors.shape[1],
+              sigma=1.0, learning_rate=0.5)
+
+som.random_weights_init(vectors)
+som.train_random(vectors, 1000)
+
+# =========================
+# 4️⃣ SOM映射
+# =========================
+som_map = np.zeros((som_size, som_size, vectors.shape[1]))
+
+for v in vectors:
+    x, y = som.winner(v)
+    som_map[x, y] += v
+
+# =========================
+# 5️⃣ PCA on SOM
+# =========================
+som_flat = som_map.reshape(-1, vectors.shape[1])
+
+pca_som = PCA(n_components=3)
+som_pca = pca_som.fit_transform(som_flat)
+
+# normalize
+som_pca = (som_pca - som_pca.min()) / (som_pca.max() - som_pca.min())
+
+som_img = som_pca.reshape(som_size, som_size, 3)
+
+
+# =========================
+# 6️⃣ Visualization
+# =========================
+plt.figure(figsize=(10, 5))
+
+plt.subplot(1, 2, 1)
+plt.imshow(pca_img)
+plt.title("PCA on Dataset (Global Structure)")
+plt.axis("off")
+
+plt.subplot(1, 2, 2)
+plt.imshow(som_img)
+plt.title("PCA on SOM (Local Organization)")
+plt.axis("off")
+
+plt.tight_layout()
+plt.show()
