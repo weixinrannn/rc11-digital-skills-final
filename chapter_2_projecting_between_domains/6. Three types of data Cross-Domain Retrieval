@@ -1,4 +1,5 @@
 import os
+import shutil
 import numpy as np
 import clip
 import torch
@@ -33,6 +34,7 @@ os.makedirs(save_root, exist_ok=True)
 # Semantic query groups
 # =====================================
 query_groups = {
+
     "dark_hidden_window": [
         "dark window interior",
         "shadow window room",
@@ -101,27 +103,23 @@ query_groups = {
 # =====================================
 # Remove similar results
 # =====================================
-def cosine_similarity(a, b):
-    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
-
-
 def remove_similar(indices, vectors, threshold=0.90):
     selected = []
-    kept_vecs = []
+    vecs = []
 
     for i in indices:
         v = vectors[i]
         keep = True
 
-        for sv in kept_vecs:
-            sim = cosine_similarity(v, sv)
+        for sv in vecs:
+            sim = np.dot(v, sv) / (np.linalg.norm(v) * np.linalg.norm(sv))
             if sim > threshold:
                 keep = False
                 break
 
         if keep:
             selected.append(i)
-            kept_vecs.append(v)
+            vecs.append(v)
 
     return selected
 
@@ -129,6 +127,7 @@ def remove_similar(indices, vectors, threshold=0.90):
 # Multi-query semantic search
 # =====================================
 def multi_query_search(queries):
+
     tokens = clip.tokenize(queries).to(device)
 
     with torch.no_grad():
@@ -138,9 +137,9 @@ def multi_query_search(queries):
     text_features = text_features.cpu().numpy()
 
     def rank(vectors):
-        sims = np.dot(vectors, text_features.T)  # [N, Q]
-        sims = sims.max(axis=1)                  # best match per image
-        return np.argsort(-sims)                 # descending order
+        sims = np.dot(vectors, text_features.T)
+        sims = sims.max(axis=1)
+        return np.argsort(-sims)
 
     return (
         rank(paint_vectors),
@@ -151,88 +150,88 @@ def multi_query_search(queries):
 # =====================================
 # Select top results
 # =====================================
-def select(indices, vectors, names, num=5):
+def select(indices, vectors, names, num=6):
+
     indices = remove_similar(indices, vectors)
 
     final = []
+
     for i in indices:
         path = str(names[i])
+
         if not os.path.exists(path):
             continue
 
         final.append(i)
+
         if len(final) >= num:
             break
 
     return final
 
 # =====================================
-# Safe image loading
+# Save images
 # =====================================
-def open_image_safe(path):
-    try:
-        return Image.open(path).convert("RGB")
-    except Exception as e:
-        print("Warning: failed to load image:", path, e)
-        return None
+def save_images(idxs, names, folder):
+
+    os.makedirs(folder, exist_ok=True)
+
+    for i, idx in enumerate(idxs):
+        try:
+            shutil.copy(names[idx], os.path.join(folder, f"{i}.jpg"))
+        except:
+            pass
 
 # =====================================
-# Save collage (3 rows: painting / film / airbnb)
+# Visualization
 # =====================================
-def save_collage(group_name, p_idxs, f_idxs, a_idxs,
-                 paint_names, film_names, airbnb_names,
-                 save_path, cols=5):
+def show(group_name, p, f, a):
 
-    fig = plt.figure(figsize=(cols * 3.2, 10))
-    fig.suptitle(group_name.replace("_", " "), fontsize=18)
+    plt.figure(figsize=(18, 8))
+    plt.suptitle(group_name, fontsize=16)
 
-    def draw_row(row_id, idxs, names, row_title):
-        for i in range(cols):
-            ax = plt.subplot(3, cols, row_id * cols + i + 1)
+    def draw(row, idxs, names):
+        for i, idx in enumerate(idxs):
+            img = Image.open(names[idx])
+            plt.subplot(3, 6, row * 6 + i + 1)
+            plt.imshow(img)
+            plt.axis("off")
 
-            if i < len(idxs):
-                path = str(names[idxs[i]])
-                img = open_image_safe(path)
-                if img is not None:
-                    ax.imshow(img)
+    draw(0, p, paint_names)
+    draw(1, f, film_names)
+    draw(2, a, airbnb_names)
 
-            ax.axis("off")
+    plt.subplot(3, 6, 1)
+    plt.title("Paintings", loc="left")
 
-            if i == 0:
-                ax.set_title(row_title, loc="left", fontsize=12)
+    plt.subplot(3, 6, 7)
+    plt.title("Film", loc="left")
 
-    draw_row(0, p_idxs, paint_names, "Paintings")
-    draw_row(1, f_idxs, film_names, "Film")
-    draw_row(2, a_idxs, airbnb_names, "Airbnb")
+    plt.subplot(3, 6, 13)
+    plt.title("Airbnb", loc="left")
 
-    plt.tight_layout(rect=[0, 0, 1, 0.95])
-    plt.savefig(save_path, dpi=300, bbox_inches="tight")
-    plt.close()
-
-    print("Saved collage:", save_path)
+    plt.tight_layout()
+    plt.show()
 
 # =====================================
 # Main process
 # =====================================
 for group_name, queries in query_groups.items():
+
     print("\nProcessing:", group_name)
 
     p_all, f_all, a_all = multi_query_search(queries)
 
-    p = select(p_all, paint_vectors, paint_names, num=5)
-    f = select(f_all, film_vectors, film_names, num=5)
-    a = select(a_all, airbnb_vectors, airbnb_names, num=5)
+    p = select(p_all, paint_vectors, paint_names)
+    f = select(f_all, film_vectors, film_names)
+    a = select(a_all, airbnb_vectors, airbnb_names)
 
-    save_path = os.path.join(save_root, f"{group_name}_collage.png")
+    base = os.path.join(save_root, group_name)
 
-    save_collage(
-        group_name,
-        p, f, a,
-        paint_names,
-        film_names,
-        airbnb_names,
-        save_path,
-        cols=5
-    )
+    save_images(p, paint_names, os.path.join(base, "paintings"))
+    save_images(f, film_names, os.path.join(base, "film"))
+    save_images(a, airbnb_names, os.path.join(base, "airbnb"))
+
+    show(group_name, p, f, a)
 
 print("\nAll results saved to:", save_root)
