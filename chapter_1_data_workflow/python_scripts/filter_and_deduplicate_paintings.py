@@ -1,487 +1,294 @@
-{
- "cells": [
-  {
-   "cell_type": "code",
-   "execution_count": 1,
-   "id": "4973a309-26b9-451e-8e8a-72e65b055678",
-   "metadata": {},
-   "outputs": [
-    {
-     "name": "stdout",
-     "output_type": "stream",
-     "text": [
-      "原始图片数量：1452\n"
-     ]
-    },
-    {
-     "name": "stderr",
-     "output_type": "stream",
-     "text": [
-      "Step 1/3 完全重复检查: 100%|██████████████████████████████████████████████████████| 1452/1452 [00:03<00:00, 405.00it/s]\n"
-     ]
-    },
-    {
-     "name": "stdout",
-     "output_type": "stream",
-     "text": [
-      "完全重复清洗后数量：928\n"
-     ]
-    },
-    {
-     "name": "stderr",
-     "output_type": "stream",
-     "text": [
-      "Step 2/3 相似图检查: 100%|███████████████████████████████████████████████████████████| 928/928 [00:10<00:00, 87.67it/s]\n"
-     ]
-    },
-    {
-     "name": "stdout",
-     "output_type": "stream",
-     "text": [
-      "相似图清洗后数量：915\n"
-     ]
-    },
-    {
-     "name": "stderr",
-     "output_type": "stream",
-     "text": [
-      "Step 3/3 主题筛选: 100%|█████████████████████████████████████████████████████████████| 915/915 [00:50<00:00, 18.27it/s]\n"
-     ]
-    },
-    {
-     "name": "stdout",
-     "output_type": "stream",
-     "text": [
-      "\n",
-      "===== 全部完成 =====\n",
-      "原始图片数量：1452\n",
-      "最终保留数量：586\n",
-      "移除/待复核数量：866\n",
-      "最终保留文件夹：D:\\00\\paintings_final_selected\n",
-      "删除/复核文件夹：D:\\00\\paintings_removed_review\n",
-      "metadata表：D:\\00\\painting_metadata_final.csv\n"
-     ]
-    }
-   ],
-   "source": [
-    "import shutil\n",
-    "import hashlib\n",
-    "from pathlib import Path\n",
-    "\n",
-    "import pandas as pd\n",
-    "from PIL import Image\n",
-    "from tqdm import tqdm\n",
-    "import imagehash\n",
-    "\n",
-    "import torch\n",
-    "import open_clip\n",
-    "\n",
-    "\n",
-    "# =====================================\n",
-    "# 1. 路径设置\n",
-    "# =====================================\n",
-    "RAW_DIR = Path(r\"D:\\00\\raw_paintings\")\n",
-    "FINAL_DIR = Path(r\"D:\\00\\paintings_final_selected\")\n",
-    "REMOVED_DIR = Path(r\"D:\\00\\paintings_removed_review\")\n",
-    "CSV_PATH = Path(r\"D:\\00\\painting_metadata_final.csv\")\n",
-    "\n",
-    "FINAL_DIR.mkdir(parents=True, exist_ok=True)\n",
-    "REMOVED_DIR.mkdir(parents=True, exist_ok=True)\n",
-    "\n",
-    "VALID_EXTS = {\".jpg\", \".jpeg\", \".png\", \".webp\", \".bmp\", \".tif\", \".tiff\"}\n",
-    "\n",
-    "# =====================================\n",
-    "# 2. 参数设置\n",
-    "# =====================================\n",
-    "PHASH_THRESHOLD = 6\n",
-    "POS_THRESHOLD = 0.24\n",
-    "MARGIN_THRESHOLD = 0.02\n",
-    "\n",
-    "# =====================================\n",
-    "# 3. 工具函数\n",
-    "# =====================================\n",
-    "def file_md5(path: Path, chunk_size=8192):\n",
-    "    md5 = hashlib.md5()\n",
-    "    with open(path, \"rb\") as f:\n",
-    "        while True:\n",
-    "            chunk = f.read(chunk_size)\n",
-    "            if not chunk:\n",
-    "                break\n",
-    "            md5.update(chunk)\n",
-    "    return md5.hexdigest()\n",
-    "\n",
-    "def safe_open_image(path: Path):\n",
-    "    try:\n",
-    "        return Image.open(path).convert(\"RGB\")\n",
-    "    except Exception:\n",
-    "        return None\n",
-    "\n",
-    "def image_quality_score(path: Path):\n",
-    "    img = safe_open_image(path)\n",
-    "    if img is None:\n",
-    "        return 0\n",
-    "    width, height = img.size\n",
-    "    pixel_score = width * height\n",
-    "    file_score = path.stat().st_size\n",
-    "    return pixel_score + file_score\n",
-    "\n",
-    "def choose_better_image(path1: Path, path2: Path):\n",
-    "    score1 = image_quality_score(path1)\n",
-    "    score2 = image_quality_score(path2)\n",
-    "    return path1 if score1 >= score2 else path2\n",
-    "\n",
-    "\n",
-    "# =====================================\n",
-    "# 4. 收集图片\n",
-    "# =====================================\n",
-    "image_files = [p for p in RAW_DIR.iterdir() if p.suffix.lower() in VALID_EXTS]\n",
-    "if not image_files:\n",
-    "    print(\"raw_paintings 文件夹里没有图片。\")\n",
-    "    raise SystemExit\n",
-    "\n",
-    "print(f\"原始图片数量：{len(image_files)}\")\n",
-    "\n",
-    "# =====================================\n",
-    "# 5. 第一步：完全重复去重（MD5）\n",
-    "# =====================================\n",
-    "md5_map = {}\n",
-    "exact_dup_log = []\n",
-    "\n",
-    "for img_path in tqdm(image_files, desc=\"Step 1/3 完全重复检查\"):\n",
-    "    try:\n",
-    "        md5 = file_md5(img_path)\n",
-    "\n",
-    "        if md5 not in md5_map:\n",
-    "            md5_map[md5] = img_path\n",
-    "        else:\n",
-    "            old_path = md5_map[md5]\n",
-    "            keep = choose_better_image(old_path, img_path)\n",
-    "            drop = img_path if keep == old_path else old_path\n",
-    "            md5_map[md5] = keep\n",
-    "\n",
-    "            exact_dup_log.append({\n",
-    "                \"image_name\": drop.name,\n",
-    "                \"image_path\": str(drop),\n",
-    "                \"status\": \"removed_exact_duplicate\",\n",
-    "                \"reason\": \"same_md5\",\n",
-    "                \"best_positive_prompt\": \"\",\n",
-    "                \"best_positive_score\": None,\n",
-    "                \"best_negative_prompt\": \"\",\n",
-    "                \"best_negative_score\": None,\n",
-    "                \"margin\": None\n",
-    "            })\n",
-    "\n",
-    "    except Exception as e:\n",
-    "        exact_dup_log.append({\n",
-    "            \"image_name\": img_path.name,\n",
-    "            \"image_path\": str(img_path),\n",
-    "            \"status\": \"error\",\n",
-    "            \"reason\": f\"md5_error:{e}\",\n",
-    "            \"best_positive_prompt\": \"\",\n",
-    "            \"best_positive_score\": None,\n",
-    "            \"best_negative_prompt\": \"\",\n",
-    "            \"best_negative_score\": None,\n",
-    "            \"margin\": None\n",
-    "        })\n",
-    "\n",
-    "stage1_files = list(md5_map.values())\n",
-    "print(f\"完全重复清洗后数量：{len(stage1_files)}\")\n",
-    "\n",
-    "# =====================================\n",
-    "# 6. 第二步：近似重复去重（pHash）\n",
-    "# =====================================\n",
-    "kept_files = []\n",
-    "kept_hashes = []\n",
-    "similar_dup_log = []\n",
-    "\n",
-    "for img_path in tqdm(stage1_files, desc=\"Step 2/3 相似图检查\"):\n",
-    "    img = safe_open_image(img_path)\n",
-    "    if img is None:\n",
-    "        similar_dup_log.append({\n",
-    "            \"image_name\": img_path.name,\n",
-    "            \"image_path\": str(img_path),\n",
-    "            \"status\": \"error\",\n",
-    "            \"reason\": \"open_error\",\n",
-    "            \"best_positive_prompt\": \"\",\n",
-    "            \"best_positive_score\": None,\n",
-    "            \"best_negative_prompt\": \"\",\n",
-    "            \"best_negative_score\": None,\n",
-    "            \"margin\": None\n",
-    "        })\n",
-    "        continue\n",
-    "\n",
-    "    try:\n",
-    "        current_hash = imagehash.phash(img)\n",
-    "    except Exception as e:\n",
-    "        similar_dup_log.append({\n",
-    "            \"image_name\": img_path.name,\n",
-    "            \"image_path\": str(img_path),\n",
-    "            \"status\": \"error\",\n",
-    "            \"reason\": f\"phash_error:{e}\",\n",
-    "            \"best_positive_prompt\": \"\",\n",
-    "            \"best_positive_score\": None,\n",
-    "            \"best_negative_prompt\": \"\",\n",
-    "            \"best_negative_score\": None,\n",
-    "            \"margin\": None\n",
-    "        })\n",
-    "        continue\n",
-    "\n",
-    "    found_similar = False\n",
-    "\n",
-    "    for i, kept_path in enumerate(kept_files):\n",
-    "        dist = current_hash - kept_hashes[i]\n",
-    "\n",
-    "        if dist <= PHASH_THRESHOLD:\n",
-    "            better = choose_better_image(kept_path, img_path)\n",
-    "            worse = img_path if better == kept_path else kept_path\n",
-    "\n",
-    "            if better == img_path:\n",
-    "                kept_files[i] = img_path\n",
-    "                kept_hashes[i] = current_hash\n",
-    "\n",
-    "            similar_dup_log.append({\n",
-    "                \"image_name\": worse.name,\n",
-    "                \"image_path\": str(worse),\n",
-    "                \"status\": \"removed_similar_duplicate\",\n",
-    "                \"reason\": f\"phash_distance={dist}\",\n",
-    "                \"best_positive_prompt\": \"\",\n",
-    "                \"best_positive_score\": None,\n",
-    "                \"best_negative_prompt\": \"\",\n",
-    "                \"best_negative_score\": None,\n",
-    "                \"margin\": None\n",
-    "            })\n",
-    "\n",
-    "            found_similar = True\n",
-    "            break\n",
-    "\n",
-    "    if not found_similar:\n",
-    "        kept_files.append(img_path)\n",
-    "        kept_hashes.append(current_hash)\n",
-    "\n",
-    "deduped_files = kept_files\n",
-    "print(f\"相似图清洗后数量：{len(deduped_files)}\")\n",
-    "\n",
-    "# =====================================\n",
-    "# 7. 第三步：主题筛选（CLIP）\n",
-    "# =====================================\n",
-    "device = \"cuda\" if torch.cuda.is_available() else \"cpu\"\n",
-    "\n",
-    "model, _, preprocess = open_clip.create_model_and_transforms(\n",
-    "    \"ViT-B-32\",\n",
-    "    pretrained=\"laion2b_s34b_b79k\"\n",
-    ")\n",
-    "tokenizer = open_clip.get_tokenizer(\"ViT-B-32\")\n",
-    "model = model.to(device)\n",
-    "model.eval()\n",
-    "\n",
-    "positive_prompts = [\n",
-    "    \"a painting of an interior room with a window\",\n",
-    "    \"a painting of a domestic interior with sunlight entering through a window\",\n",
-    "    \"a painting of a person inside looking out through a window\",\n",
-    "    \"a painting of an interior space with a visible window and outside view\",\n",
-    "    \"a painting of a quiet room with a window\",\n",
-    "    \"a painting of an indoor scene with strong window light\",\n",
-    "]\n",
-    "\n",
-    "negative_prompts = [\n",
-    "    \"a painting of an outdoor landscape\",\n",
-    "    \"a painting without a window\",\n",
-    "    \"a portrait painting with no relation to a window\",\n",
-    "    \"an abstract painting\",\n",
-    "    \"a painting of only outdoor scenery\",\n",
-    "    \"a blurry low quality image\",\n",
-    "]\n",
-    "\n",
-    "all_prompts = positive_prompts + negative_prompts\n",
-    "\n",
-    "with torch.no_grad():\n",
-    "    text_tokens = tokenizer(all_prompts).to(device)\n",
-    "    text_features = model.encode_text(text_tokens)\n",
-    "    text_features /= text_features.norm(dim=-1, keepdim=True)\n",
-    "\n",
-    "selection_results = []\n",
-    "\n",
-    "for img_path in tqdm(deduped_files, desc=\"Step 3/3 主题筛选\"):\n",
-    "    img = safe_open_image(img_path)\n",
-    "    if img is None:\n",
-    "        selection_results.append({\n",
-    "            \"painting_id\": img_path.stem,\n",
-    "            \"image_name\": img_path.name,\n",
-    "            \"image_path\": str(img_path),\n",
-    "            \"status\": \"removed_error\",\n",
-    "            \"reason\": \"cannot_open\",\n",
-    "            \"best_positive_prompt\": \"\",\n",
-    "            \"best_positive_score\": None,\n",
-    "            \"best_negative_prompt\": \"\",\n",
-    "            \"best_negative_score\": None,\n",
-    "            \"margin\": None,\n",
-    "            \"window_visible\": \"\",\n",
-    "            \"window_position\": \"\",\n",
-    "            \"light_direction\": \"\",\n",
-    "            \"composition_type\": \"\",\n",
-    "            \"outside_visibility\": \"\",\n",
-    "            \"notes\": \"\"\n",
-    "        })\n",
-    "        continue\n",
-    "\n",
-    "    try:\n",
-    "        image_input = preprocess(img).unsqueeze(0).to(device)\n",
-    "\n",
-    "        with torch.no_grad():\n",
-    "            image_features = model.encode_image(image_input)\n",
-    "            image_features /= image_features.norm(dim=-1, keepdim=True)\n",
-    "            similarity = (100.0 * image_features @ text_features.T).softmax(dim=-1)[0]\n",
-    "            similarity = similarity.cpu().numpy()\n",
-    "\n",
-    "        pos_scores = similarity[:len(positive_prompts)]\n",
-    "        neg_scores = similarity[len(positive_prompts):]\n",
-    "\n",
-    "        best_pos_idx = pos_scores.argmax()\n",
-    "        best_neg_idx = neg_scores.argmax()\n",
-    "\n",
-    "        best_pos_score = float(pos_scores[best_pos_idx])\n",
-    "        best_neg_score = float(neg_scores[best_neg_idx])\n",
-    "\n",
-    "        best_pos_prompt = positive_prompts[best_pos_idx]\n",
-    "        best_neg_prompt = negative_prompts[best_neg_idx]\n",
-    "\n",
-    "        margin = best_pos_score - best_neg_score\n",
-    "\n",
-    "        keep = (best_pos_score >= POS_THRESHOLD) and (margin >= MARGIN_THRESHOLD)\n",
-    "\n",
-    "        if keep:\n",
-    "            status = \"selected_final\"\n",
-    "            reason = \"fits_interior_window_theme\"\n",
-    "            shutil.copy2(img_path, FINAL_DIR / img_path.name)\n",
-    "        else:\n",
-    "            status = \"removed_theme_mismatch\"\n",
-    "            reason = \"not_matching_theme_enough\"\n",
-    "            shutil.copy2(img_path, REMOVED_DIR / img_path.name)\n",
-    "\n",
-    "        selection_results.append({\n",
-    "            \"painting_id\": img_path.stem,\n",
-    "            \"image_name\": img_path.name,\n",
-    "            \"image_path\": str(img_path),\n",
-    "            \"status\": status,\n",
-    "            \"reason\": reason,\n",
-    "            \"best_positive_prompt\": best_pos_prompt,\n",
-    "            \"best_positive_score\": best_pos_score,\n",
-    "            \"best_negative_prompt\": best_neg_prompt,\n",
-    "            \"best_negative_score\": best_neg_score,\n",
-    "            \"margin\": margin,\n",
-    "            \"window_visible\": \"\",\n",
-    "            \"window_position\": \"\",\n",
-    "            \"light_direction\": \"\",\n",
-    "            \"composition_type\": \"\",\n",
-    "            \"outside_visibility\": \"\",\n",
-    "            \"notes\": \"\"\n",
-    "        })\n",
-    "\n",
-    "    except Exception as e:\n",
-    "        selection_results.append({\n",
-    "            \"painting_id\": img_path.stem,\n",
-    "            \"image_name\": img_path.name,\n",
-    "            \"image_path\": str(img_path),\n",
-    "            \"status\": \"removed_error\",\n",
-    "            \"reason\": f\"clip_error:{e}\",\n",
-    "            \"best_positive_prompt\": \"\",\n",
-    "            \"best_positive_score\": None,\n",
-    "            \"best_negative_prompt\": \"\",\n",
-    "            \"best_negative_score\": None,\n",
-    "            \"margin\": None,\n",
-    "            \"window_visible\": \"\",\n",
-    "            \"window_position\": \"\",\n",
-    "            \"light_direction\": \"\",\n",
-    "            \"composition_type\": \"\",\n",
-    "            \"outside_visibility\": \"\",\n",
-    "            \"notes\": \"\"\n",
-    "        })\n",
-    "\n",
-    "# =====================================\n",
-    "# 8. 把前面删除的重复图也移动到 removed_review\n",
-    "# =====================================\n",
-    "for rec in exact_dup_log + similar_dup_log:\n",
-    "    p = Path(rec[\"image_path\"])\n",
-    "    if p.exists():\n",
-    "        try:\n",
-    "            shutil.copy2(p, REMOVED_DIR / p.name)\n",
-    "        except Exception:\n",
-    "            pass\n",
-    "\n",
-    "# =====================================\n",
-    "# 9. 保存总表\n",
-    "# =====================================\n",
-    "all_results = []\n",
-    "\n",
-    "# 重复图日志补齐字段\n",
-    "for rec in exact_dup_log + similar_dup_log:\n",
-    "    all_results.append({\n",
-    "        \"painting_id\": Path(rec[\"image_path\"]).stem,\n",
-    "        \"image_name\": rec[\"image_name\"],\n",
-    "        \"image_path\": rec[\"image_path\"],\n",
-    "        \"status\": rec[\"status\"],\n",
-    "        \"reason\": rec[\"reason\"],\n",
-    "        \"best_positive_prompt\": rec[\"best_positive_prompt\"],\n",
-    "        \"best_positive_score\": rec[\"best_positive_score\"],\n",
-    "        \"best_negative_prompt\": rec[\"best_negative_prompt\"],\n",
-    "        \"best_negative_score\": rec[\"best_negative_score\"],\n",
-    "        \"margin\": rec[\"margin\"],\n",
-    "        \"window_visible\": \"\",\n",
-    "        \"window_position\": \"\",\n",
-    "        \"light_direction\": \"\",\n",
-    "        \"composition_type\": \"\",\n",
-    "        \"outside_visibility\": \"\",\n",
-    "        \"notes\": \"\"\n",
-    "    })\n",
-    "\n",
-    "all_results.extend(selection_results)\n",
-    "\n",
-    "df = pd.DataFrame(all_results)\n",
-    "df.to_csv(CSV_PATH, index=False, encoding=\"utf-8-sig\")\n",
-    "\n",
-    "# =====================================\n",
-    "# 10. 完成输出\n",
-    "# =====================================\n",
-    "selected_count = (df[\"status\"] == \"selected_final\").sum()\n",
-    "removed_count = len(df) - selected_count\n",
-    "\n",
-    "print(\"\\n===== 全部完成 =====\")\n",
-    "print(f\"原始图片数量：{len(image_files)}\")\n",
-    "print(f\"最终保留数量：{selected_count}\")\n",
-    "print(f\"移除/待复核数量：{removed_count}\")\n",
-    "print(f\"最终保留文件夹：{FINAL_DIR}\")\n",
-    "print(f\"删除/复核文件夹：{REMOVED_DIR}\")\n",
-    "print(f\"metadata表：{CSV_PATH}\")"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "execution_count": null,
-   "id": "3349c2cf-0e15-4bd5-98f1-e80a47d8beac",
-   "metadata": {},
-   "outputs": [],
-   "source": []
-  }
- ],
- "metadata": {
-  "kernelspec": {
-   "display_name": "Python 3 (ipykernel)",
-   "language": "python",
-   "name": "python3"
-  },
-  "language_info": {
-   "codemirror_mode": {
-    "name": "ipython",
-    "version": 3
-   },
-   "file_extension": ".py",
-   "mimetype": "text/x-python",
-   "name": "python",
-   "nbconvert_exporter": "python",
-   "pygments_lexer": "ipython3",
-   "version": "3.11.1"
-  }
- },
- "nbformat": 4,
- "nbformat_minor": 5
-}
+import shutil
+import hashlib
+from pathlib import Path
+
+import pandas as pd
+from PIL import Image
+from tqdm import tqdm
+import imagehash
+
+import torch
+import open_clip
+
+
+# =====================================
+# 1. Path Configuration
+# =====================================
+RAW_DIR = Path(r"D:\00\raw_paintings")
+FINAL_DIR = Path(r"D:\00\paintings_final_selected")
+REMOVED_DIR = Path(r"D:\00\paintings_removed_review")
+CSV_PATH = Path(r"D:\00\painting_metadata_final.csv")
+
+FINAL_DIR.mkdir(parents=True, exist_ok=True)
+REMOVED_DIR.mkdir(parents=True, exist_ok=True)
+
+VALID_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
+
+
+# =====================================
+# 2. Parameters
+# =====================================
+PHASH_THRESHOLD = 6
+POS_THRESHOLD = 0.24
+MARGIN_THRESHOLD = 0.02
+
+
+# =====================================
+# 3. Utility Functions
+# =====================================
+def file_md5(path: Path, chunk_size=8192):
+    md5 = hashlib.md5()
+    with open(path, "rb") as f:
+        while True:
+            chunk = f.read(chunk_size)
+            if not chunk:
+                break
+            md5.update(chunk)
+    return md5.hexdigest()
+
+
+def safe_open_image(path: Path):
+    try:
+        return Image.open(path).convert("RGB")
+    except Exception:
+        return None
+
+
+def image_quality_score(path: Path):
+    img = safe_open_image(path)
+    if img is None:
+        return 0
+    width, height = img.size
+    pixel_score = width * height
+    file_score = path.stat().st_size
+    return pixel_score + file_score
+
+
+def choose_better_image(path1: Path, path2: Path):
+    score1 = image_quality_score(path1)
+    score2 = image_quality_score(path2)
+    return path1 if score1 >= score2 else path2
+
+
+# =====================================
+# 4. Collect Images
+# =====================================
+image_files = [p for p in RAW_DIR.iterdir() if p.suffix.lower() in VALID_EXTS]
+
+if not image_files:
+    print("No images found in raw_paintings folder.")
+    raise SystemExit
+
+print(f"Original image count: {len(image_files)}")
+
+
+# =====================================
+# 5. Step 1: Remove Exact Duplicates (MD5)
+# =====================================
+md5_map = {}
+exact_dup_log = []
+
+for img_path in tqdm(image_files, desc="Step 1/3 Exact duplicate check"):
+    try:
+        md5 = file_md5(img_path)
+
+        if md5 not in md5_map:
+            md5_map[md5] = img_path
+        else:
+            old_path = md5_map[md5]
+            keep = choose_better_image(old_path, img_path)
+            drop = img_path if keep == old_path else old_path
+            md5_map[md5] = keep
+
+            exact_dup_log.append({
+                "image_name": drop.name,
+                "image_path": str(drop),
+                "status": "removed_exact_duplicate",
+                "reason": "same_md5",
+                "best_positive_prompt": "",
+                "best_positive_score": None,
+                "best_negative_prompt": "",
+                "best_negative_score": None,
+                "margin": None
+            })
+
+    except Exception as e:
+        exact_dup_log.append({
+            "image_name": img_path.name,
+            "image_path": str(img_path),
+            "status": "error",
+            "reason": f"md5_error:{e}",
+            "best_positive_prompt": "",
+            "best_positive_score": None,
+            "best_negative_prompt": "",
+            "best_negative_score": None,
+            "margin": None
+        })
+
+stage1_files = list(md5_map.values())
+print(f"After exact duplicate removal: {len(stage1_files)}")
+
+
+# =====================================
+# 6. Step 2: Remove Near Duplicates (pHash)
+# =====================================
+kept_files = []
+kept_hashes = []
+similar_dup_log = []
+
+for img_path in tqdm(stage1_files, desc="Step 2/3 Similar image check"):
+    img = safe_open_image(img_path)
+
+    if img is None:
+        similar_dup_log.append({
+            "image_name": img_path.name,
+            "image_path": str(img_path),
+            "status": "error",
+            "reason": "open_error",
+            "best_positive_prompt": "",
+            "best_positive_score": None,
+            "best_negative_prompt": "",
+            "best_negative_score": None,
+            "margin": None
+        })
+        continue
+
+    try:
+        current_hash = imagehash.phash(img)
+    except Exception as e:
+        similar_dup_log.append({
+            "image_name": img_path.name,
+            "image_path": str(img_path),
+            "status": "error",
+            "reason": f"phash_error:{e}",
+            "best_positive_prompt": "",
+            "best_positive_score": None,
+            "best_negative_prompt": "",
+            "best_negative_score": None,
+            "margin": None
+        })
+        continue
+
+    found_similar = False
+
+    for i, kept_path in enumerate(kept_files):
+        dist = current_hash - kept_hashes[i]
+
+        if dist <= PHASH_THRESHOLD:
+            better = choose_better_image(kept_path, img_path)
+            worse = img_path if better == kept_path else kept_path
+
+            if better == img_path:
+                kept_files[i] = img_path
+                kept_hashes[i] = current_hash
+
+            similar_dup_log.append({
+                "image_name": worse.name,
+                "image_path": str(worse),
+                "status": "removed_similar_duplicate",
+                "reason": f"phash_distance={dist}",
+                "best_positive_prompt": "",
+                "best_positive_score": None,
+                "best_negative_prompt": "",
+                "best_negative_score": None,
+                "margin": None
+            })
+
+            found_similar = True
+            break
+
+    if not found_similar:
+        kept_files.append(img_path)
+        kept_hashes.append(current_hash)
+
+deduped_files = kept_files
+print(f"After similar duplicate removal: {len(deduped_files)}")
+
+
+# =====================================
+# 7. Step 3: Semantic Filtering (CLIP)
+# =====================================
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+model, _, preprocess = open_clip.create_model_and_transforms(
+    "ViT-B-32",
+    pretrained="laion2b_s34b_b79k"
+)
+
+tokenizer = open_clip.get_tokenizer("ViT-B-32")
+model = model.to(device)
+model.eval()
+
+positive_prompts = [
+    "a painting of an interior room with a window",
+    "a painting of a domestic interior with sunlight entering through a window",
+    "a painting of a person inside looking out through a window",
+    "a painting of an interior space with a visible window and outside view",
+    "a painting of a quiet room with a window",
+    "a painting of an indoor scene with strong window light",
+]
+
+negative_prompts = [
+    "a painting of an outdoor landscape",
+    "a painting without a window",
+    "a portrait painting with no relation to a window",
+    "an abstract painting",
+    "a painting of only outdoor scenery",
+    "a blurry low quality image",
+]
+
+all_prompts = positive_prompts + negative_prompts
+
+with torch.no_grad():
+    text_tokens = tokenizer(all_prompts).to(device)
+    text_features = model.encode_text(text_tokens)
+    text_features /= text_features.norm(dim=-1, keepdim=True)
+
+selection_results = []
+
+for img_path in tqdm(deduped_files, desc="Step 3/3 Semantic filtering"):
+    img = safe_open_image(img_path)
+
+    if img is None:
+        continue
+
+    try:
+        image_input = preprocess(img).unsqueeze(0).to(device)
+
+        with torch.no_grad():
+            image_features = model.encode_image(image_input)
+            image_features /= image_features.norm(dim=-1, keepdim=True)
+            similarity = (100.0 * image_features @ text_features.T).softmax(dim=-1)[0]
+            similarity = similarity.cpu().numpy()
+
+        pos_scores = similarity[:len(positive_prompts)]
+        neg_scores = similarity[len(positive_prompts):]
+
+        best_pos_score = float(pos_scores.max())
+        best_neg_score = float(neg_scores.max())
+        margin = best_pos_score - best_neg_score
+
+        keep = (best_pos_score >= POS_THRESHOLD) and (margin >= MARGIN_THRESHOLD)
+
+        if keep:
+            shutil.copy2(img_path, FINAL_DIR / img_path.name)
+        else:
+            shutil.copy2(img_path, REMOVED_DIR / img_path.name)
+
+    except Exception:
+        continue
+
+
+# =====================================
+# 8. Final Summary
+# =====================================
+selected_count = len(list(FINAL_DIR.iterdir()))
+removed_count = len(list(REMOVED_DIR.iterdir()))
+
+print("\n===== PROCESS COMPLETED =====")
+print(f"Original images: {len(image_files)}")
+print(f"Final selected images: {selected_count}")
+print(f"Removed/review images: {removed_count}")
+print(f"Final folder: {FINAL_DIR}")
+print(f"Removed folder: {REMOVED_DIR}")
+print(f"Metadata CSV: {CSV_PATH}")
